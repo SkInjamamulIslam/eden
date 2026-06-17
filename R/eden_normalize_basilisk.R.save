@@ -1,0 +1,122 @@
+## eden_normalize_basilisk.R - STAGE 2 main function (basilisk backend)
+##
+## This REPLACES eden_normalize.R's eden_from_phyloseq for the public release.
+## Instead of reticulate::import against the user's Python, it runs the whole
+## training step inside the package's private basilisk environment via
+## basiliskRun(). Everything else (Pagel test, phyloseq assembly, taxonomy)
+## is identical and stays in pure R.
+
+#' @rdname eden_from_phyloseq
+#' @export
+eden_from_phyloseq <- function(ps, model = c("auto", "EDEN", "EDEN-P"),
+                               n_latent = 10L, epochs = 400L, warmup = 100L,
+                               lambda_threshold = 0.30, p_threshold = 0.05,
+                               seed = 42L, verbose = TRUE) {
+  model <- match.arg(model)
+
+  counts <- .eden_counts_from_ps(ps)
+  samples <- rownames(counts); asvs <- colnames(counts)
+  libs <- rowSums(counts)
+  py_dir <- .eden_python_dir()
+
+  has_tree <- !is.null(phyloseq::phy_tree(ps, errorIfNULL = FALSE))
+  if (model == "EDEN-P" && !has_tree)
+    stop("model = 'EDEN-P' requires a phylogenetic tree.")
+
+  if (verbose) message(sprintf(
+    "EDEN: %d samples, %d ASVs, %.1f%% zeros, library %.0f-%.0f (%.1fx)",
+    nrow(counts), ncol(counts), 100 * mean(counts == 0),
+    min(libs), max(libs), max(libs) / min(libs)))
+
+  ## training closure run inside the basilisk environment
+  run_train <- function(counts, libs, model, n_latent, epochs, warmup,
+                        seed, py_dir, kernel = NULL) {
+    basilisk::basiliskRun(env = .eden_env_def, fun = function(
+        counts, libs, model, n_latent, epochs, warmup, seed, py_dir, kernel) {
+      sys <- reticulate::import("sys", convert = FALSE)
+      sys$path$insert(0L, py_di      reticulate::import("sys")$path$insert(0L, py_dir)
+      api <- reticulate::import("eden_train_api", delay_load = FALSE)
+      np  <- reticulate::import("numpy", convert = FALSE)
+      args <- list(
+        counts = np$array(counts, dtype = "float32"),
+        libs   = np$array(as.numeric(libs), dtype = "float32"),
+        model  = model, n_latent = as.integer(n_latent),
+        epochs = as.integer(epochs), warmup = as.integer(warmup),
+        seed   = as.integer(seed))
+      if (!is.null(kernel)) args$kernel <- np$array(kernel, dtype = "float32")
+      out <- do.call(api$train_eden, args)
+      list(latent = reticulate::py_to_r(out$latent),
+           uncertainty = reticulate::py_to_r(out$uncertainty),
+           reconstructed = reticulate::py_to_r(out$reconstructed),
+           theta = reticulate::py_to_r(out$theta))
+    },
+    counts = counts, libs = libs, model = model, n_latent = n_latent,
+    epochs = epochs, warmup = warmup, seed = seed, py_dir = py_dir,
+    kernel = kernel)
+  }
+
+  ## --- 1. base EDEN for theta ---
+  if (verbose) message("EDEN: training base model ...")
+  base <- run_train(counts, libs, "EDEN", n_latent, epochs, warmup, seed, py_dir)
+  theta <- as.numeric(base$theta)
+
+  ## --- 2. Pagel decision ---
+  pagel <- list(lambda = NA_real_, pvalue = NA_real_, use_p = FALSE)
+  chosen <- "EDEN"
+  if (model %in% c("auto", "EDEN-P") && has_tree) {
+    tree <- phyloseq::phy_tree(ps)
+    pagel <- .eden_pagel(theta, asvs, tree, lambda_threshold, p_threshold)
+    if (verbose && !is.na(pagel$lambda))
+      message(sprintf("EDEN: Pagel lambda = %.4f (p = %.3g)",
+                      pagel$lambda, pagel$pvalue))
+    if (model == "EDEN-P") chosen <- "EDEN-P"
+    else if (model == "auto" && isTRUE(pagel$use_p)) chosen <- "EDEN-P"
+  }
+
+  ## --- 3. final fit ---
+  if (chosen == "EDEN") {
+    fit <- base
+  } else {
+    if (verbose) message("EDEN: phylogenetic signal selected -> training EDEN-P ...")
+    C <- .eden_build_kernel(pagel$tree_pruned, asvs, pagel$common_asvs)
+    fit <- run_train(counts, libs, "EDEN-P", n_latent, epochs, warmup,
+                     seed, py_dir, kernel = C)
+  }
+
+  latent <- as.matrix(fit$latent); unc <- as.matrix(fit$uncertainty)
+  recon  <- as.matrix(fit$reconstructed)
+  rownames(latent) <- samples; colnames(latent) <- paste0("Dim", seq_len(ncol(latent)))
+  rownames(unc) <- samples
+  rownames(recon) <- samples; colnames(recon) <- asvs
+
+  rec_int <- round(recon); rec_int[rec_int < 0] <- 0
+  otu_new <- phyloseq::otu_table(t(rec_int), taxa_are_rows = TRUE)
+  parts <- list(otu_new, phyloseq::sample_data(ps))
+  if (has_tree) parts <- c(parts, list(phyloseq::phy_tree(ps)))
+  tt <- phyloseq::tax_table(ps, errorIfNULL = FALSE)
+  if (!is.null(tt)) parts <- c(parts, list(tt))
+  ps_eden <- do.call(phyloseq::merge_phyloseq, parts)
+
+  out <- list(phyloseq = ps_eden, latent = latent, uncertainty = unc,
+              reconstructed_counts = rec_int, model_used = chosen,
+              pagel = list(lambda = pagel$lambda, pvalue = pagel$pvalue))
+  class(out) <- c("eden_result", "list")
+  out
+}
+
+#' @rdname eden_normalize
+#' @export
+eden_normalize <- function(table_qza, tree_qza = NULL, taxonomy_qza = NULL,
+                           metadata = NULL, ...) {
+  if (!requireNamespace("qiime2R", quietly = TRUE))
+    stop("Reading .qza files needs qiime2R: remotes::install_github('jbisanz/qiime2R')")
+  args <- list(features = table_qza)
+  if (!is.null(tree_qza))     args$tree     <- tree_qza
+  if (!is.null(taxonomy_qza)) args$taxonomy <- taxonomy_qza
+  if (!is.null(metadata))     args$metadata <- metadata
+  ps <- do.call(qiime2R::qza_to_phyloseq, args)
+  res <- eden_from_phyloseq(ps, ...)
+  if (!is.null(taxonomy_qza))
+    res <- eden_add_taxonomy(res, taxonomy_qza = taxonomy_qza)
+  res
+}

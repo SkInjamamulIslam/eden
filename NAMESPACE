@@ -1,0 +1,8 @@
+export(eden_normalize)
+export(eden_from_phyloseq)
+export(eden_from_matrix)
+export(eden_from_table)
+export(eden_add_taxonomy)
+export(eden_setup_python)
+S3method(print, eden_result)
+importFrom(methods, as)
