@@ -49,6 +49,34 @@ remotes::install_github("SkInjamamulIslam/eden")
 The first call to `eden_normalize()` builds a private Python environment
 automatically (one-time download). No further setup is required.
 
+## Windows users — important first-time setup
+
+EDEN installs a private Python environment automatically (via basilisk).
+On Windows, conda cannot install into a folder whose path contains spaces.
+If your Windows username has a space (for example `C:\Users\Jane Smith\`),
+the first run will fail with:
+
+> 'Destination Folder' contains spaces. This can cause problems with
+> several conda packages. Please remove the spaces from the destination folder.
+
+To avoid this, point the Python environment to a space-free location
+**before** loading the package, in a fresh R session:
+
+```r
+Sys.setenv(BASILISK_EXTERNAL_DIR = "C:/basilisk")
+library(eden)
+```
+
+To set this permanently so you never need to repeat it, add the line to
+your `.Rprofile`:
+
+```r
+cat('Sys.setenv(BASILISK_EXTERNAL_DIR = "C:/basilisk")\n',
+    file = "~/.Rprofile", append = TRUE)
+```
+
+Then restart R. macOS and Linux users are unaffected.
+
 ## Usage
 
 From QIIME2 artifacts:
@@ -113,6 +141,7 @@ otherwise plain EDEN is used. Force a model with `model = "EDEN"` or
   (EDEN-P already used it); interpret accordingly.
 - Downstream taxonomic aggregation operates on EDEN's reconstructed
   (modelled) counts, not the raw observed reads.
+
 
 ## Citation
 
