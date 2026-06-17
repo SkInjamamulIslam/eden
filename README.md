@@ -127,6 +127,18 @@ Add taxonomy to a result at any time:
 ```r
 res <- eden_add_taxonomy(res, taxonomy_qza = "taxonomy.qza")
 ```
+## Choosing an output for beta diversity
+
+EDEN returns two representations:
+
+- `res$phyloseq` (reconstructed counts): use for a familiar, drop-in
+  workflow with Bray-Curtis, UniFrac, etc. This behaves like a standard
+  normalized count table.
+- `res$latent` (depth-invariant embedding): use with Euclidean distance
+  for EDEN's depth-invariant representation. EDEN-P's phylogenetically
+  informed structure is expressed here, not in the reconstructed counts.
+
+These are not interchangeable; choose based on your analysis goal.
 
 ## Model selection
 
