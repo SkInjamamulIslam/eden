@@ -1,4 +1,4 @@
-# eden
+# eden 
 
 **eDNA Depth-invariant Encoder Normalization**
 
@@ -13,7 +13,7 @@ composition while using all sequencing reads rather than discarding data.
 
 Metabarcoding produces count tables where samples are sequenced to very
 different depths. The standard fix, rarefaction, throws away reads to make
-depths equal — discarding real data. EDEN instead learns a normalized,
+depths equal â€” discarding real data. EDEN instead learns a normalized,
 depth-invariant representation of each sample using a variational
 autoencoder with a zero-inflated negative binomial likelihood, modelling
 the over-dispersion and excess zeros typical of eDNA data.
@@ -79,7 +79,7 @@ res <- eden_from_table("counts.csv", tree = "tree.nwk", metadata = "meta.csv")
 res <- eden_from_matrix(count_matrix, tree = phylo_object)
 ```
 
-## Outputs — you choose the representation
+## Outputs â€” you choose the representation
 
 ```r
 # 1. Reconstructed-count phyloseq: drop-in replacement for rarefied data.
